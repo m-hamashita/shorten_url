@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use mysql_async::prelude::*;
 use sonyflake::Sonyflake;
@@ -13,25 +14,24 @@ fn full_short_url(short_code: &str) -> String {
     format!("{}{}", base_domain, short_code)
 }
 
-async fn shorten(form_data: HashMap<String, String>) -> Result<impl warp::Reply, warp::Rejection> {
-    let url = form_data
-        .get("url")
-        .unwrap_or(&String::from(""))
-        .to_string();
-
-    let database_url =
-        mysql_async::Opts::from_url("mysql://user:password@127.0.0.1:3306/shorten").unwrap();
-    let pool = mysql_async::Pool::new(database_url);
+async fn shorten(
+    form_data: HashMap<String, String>,
+    pool: Arc<mysql_async::Pool>,
+) -> Result<impl warp::Reply, warp::Rejection> {
     let mut conn = pool
         .get_conn()
         .await
         .expect("Failed to connect to database.");
 
+    let original_url = form_data
+        .get("url")
+        .unwrap_or(&String::from(""))
+        .to_string();
     let short_codes = conn
         .exec_map(
             r"select short_code from url_mapping where original_url = :original_url",
             params! {
-                "original_url" => &url,
+                "original_url" => &original_url,
             },
             |short_code: String| short_code,
         )
@@ -55,11 +55,11 @@ async fn shorten(form_data: HashMap<String, String>) -> Result<impl warp::Reply,
     println!("id: {}, Generated short URL: {}", id, short_code);
 
     conn.exec_drop(
-        r"INSERT INTO url_mapping (id, short_code, original_url) VALUES (:id, :short_code, :original_url)",
+        r"insert into url_mapping (id, short_code, original_url) values (:id, :short_code, :original_url)",
         params! {
             "id" => &id,
             "short_code" => &short_code,
-            "original_url" => &url,
+            "original_url" => &original_url,
         },
     )
     .await
@@ -75,10 +75,10 @@ async fn shorten(form_data: HashMap<String, String>) -> Result<impl warp::Reply,
     )))
 }
 
-async fn redirect(short: String) -> Result<impl warp::Reply, warp::Rejection> {
-    let database_url =
-        mysql_async::Opts::from_url("mysql://user:password@127.0.0.1:3306/shorten").unwrap();
-    let pool = mysql_async::Pool::new(database_url);
+async fn redirect(
+    short_code: String,
+    pool: Arc<mysql_async::Pool>,
+) -> Result<impl warp::Reply, warp::Rejection> {
     let mut conn = pool
         .get_conn()
         .await
@@ -88,7 +88,7 @@ async fn redirect(short: String) -> Result<impl warp::Reply, warp::Rejection> {
         .exec_map(
             r"select original_url from url_mapping where short_code = :short_code",
             params! {
-                "short_code" => &short,
+                "short_code" => &short_code,
             },
             |original_url: String| original_url,
         )
@@ -106,8 +106,18 @@ async fn redirect(short: String) -> Result<impl warp::Reply, warp::Rejection> {
     Err(warp::reject::not_found())
 }
 
+fn with<T: Clone + Send>(
+    t: T,
+) -> impl Filter<Extract = (T,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || t.clone())
+}
+
 #[tokio::main]
 async fn main() {
+    let database_url =
+        mysql_async::Opts::from_url("mysql://user:password@127.0.0.1:3306/shorten").unwrap();
+    let pool = mysql_async::Pool::new(database_url);
+    let pool = Arc::new(pool);
     let index = warp::path::end().map(|| {
         warp::reply::html(
             r#"
@@ -122,8 +132,11 @@ async fn main() {
     let shorten_route = warp::path!("shorten")
         .and(warp::post())
         .and(warp::body::form())
+        .and(with(pool.clone()))
         .and_then(shorten);
-    let redirect_route = warp::path!(String).and_then(redirect);
+    let redirect_route = warp::path!(String)
+        .and(with(pool.clone()))
+        .and_then(redirect);
     let routes = index.or(shorten_route).or(redirect_route);
 
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
