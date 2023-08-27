@@ -17,6 +17,37 @@ fn short_url(short_code: &str) -> String {
     let base_domain = env::var("DOMAIN").unwrap_or(default_domain.to_string());
     format!("{}{}", base_domain, short_code)
 }
+fn rendering_short_url_html(short_url: &str) -> String {
+    format!(
+        r#"
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                margin: 40px;
+                text-align: center;
+            }}
+            p {{
+                background-color: #f4f4f4;
+                border: 1px solid #e0e0e0;
+                border-radius: 5px;
+                display: inline-block;
+                margin-top: 20px;
+                padding: 10px 20px;
+            }}
+            a {{
+                color: #3498db;
+                text-decoration: none;
+            }}
+            a:hover {{
+                text-decoration: underline;
+            }}
+        </style>
+        <h2>Your Short URL</h2>
+        <p>Short URL: <a href="{short_url}">{short_url}</a></p>
+        "#,
+        short_url = short_url,
+    )
+}
 
 async fn shorten(
     form_data: HashMap<String, String>,
@@ -45,12 +76,7 @@ async fn shorten(
     if !short_codes.is_empty() {
         let short_url = short_url(&short_codes[0]);
         println!("Found short URL: {}", short_url);
-        return Ok(warp::reply::html(format!(
-            r#"
-            <p>Shortened URL: <a href="{short_url}">{short_url}</a></p>
-            "#,
-            short_url = short_url,
-        )));
+        return Ok(warp::reply::html(rendering_short_url_html(&short_url)));
     }
 
     let flake = Sonyflake::new().unwrap();
@@ -70,12 +96,7 @@ async fn shorten(
     .expect("Failed to insert data.");
 
     let short_url = short_url(&short_code);
-    Ok(warp::reply::html(format!(
-        r#"
-        <p>Shortened URL: <a href="{short_url}">{short_url}</a></p>
-        "#,
-        short_url = short_url,
-    )))
+    Ok(warp::reply::html(rendering_short_url_html(&short_url)))
 }
 
 async fn redirect(
@@ -141,8 +162,15 @@ async fn main() {
     let index = warp::path::end().map(|| {
         warp::reply::html(
             r#"
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; text-align: center; }
+                input[type="text"] { padding: 10px; width: 300px; }
+                input[type="submit"] { padding: 10px 20px; }
+            </style>
+            <h2>URL Shortener</h2>
             <form action="/shorten" method="post">
-                <input type="text" name="url">
+                <input type="text" name="url" placeholder="Enter your URL here">
+                <br><br>
                 <input type="submit" value="Shorten">
             </form>
             "#,
