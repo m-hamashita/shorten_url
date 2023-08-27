@@ -3,7 +3,7 @@ USE shorten;
 
 -- url_mappingテーブルの作成
 CREATE TABLE IF NOT EXISTS url_mapping (
-    id INT AUTO_INCREMENT PRIMARY KEY,
+    id BIGINT PRIMARY KEY,
     short_url VARCHAR(255) NOT NULL,
     original_url VARCHAR(1024) NOT NULL
 );
