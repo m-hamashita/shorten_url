@@ -3,14 +3,18 @@ use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::Result;
+use clap::Parser;
 use mysql_async::prelude::*;
 use sonyflake::Sonyflake;
 use warp::http::Uri;
 use warp::Filter;
 
-fn full_short_url(short_code: &str) -> String {
+use shorten_url::settings::load_settings;
+
+fn short_url(short_code: &str) -> String {
     let default_domain = "http://localhost:3030/";
-    let base_domain = env::var("SHORTEN_DOMAIN").unwrap_or(default_domain.to_string());
+    let base_domain = env::var("DOMAIN").unwrap_or(default_domain.to_string());
     format!("{}{}", base_domain, short_code)
 }
 
@@ -39,7 +43,7 @@ async fn shorten(
         .expect("Failed to select query.");
 
     if !short_codes.is_empty() {
-        let short_url = full_short_url(&short_codes[0]);
+        let short_url = short_url(&short_codes[0]);
         println!("Found short URL: {}", short_url);
         return Ok(warp::reply::html(format!(
             r#"
@@ -64,9 +68,8 @@ async fn shorten(
     )
     .await
     .expect("Failed to insert data.");
-    drop(conn);
 
-    let short_url = full_short_url(&short_code);
+    let short_url = short_url(&short_code);
     Ok(warp::reply::html(format!(
         r#"
         <p>Shortened URL: <a href="{short_url}">{short_url}</a></p>
@@ -112,10 +115,27 @@ fn with<T: Clone + Send>(
     warp::any().map(move || t.clone())
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(long, default_value = "settings.yaml")]
+    settings: String,
+}
+
 #[tokio::main]
 async fn main() {
-    let database_url =
-        mysql_async::Opts::from_url("mysql://user:password@127.0.0.1:3306/shorten").unwrap();
+    let args = Args::parse();
+    let settings = load_settings(args.settings).expect("failed to load settings from yaml");
+
+    let database_url = format!(
+        "mysql://{}:{}@{}:{}/{}",
+        settings.mysql.user,
+        settings.mysql.password,
+        settings.mysql.host,
+        settings.mysql.port,
+        settings.mysql.db
+    );
+    let database_url = mysql_async::Opts::from_str(&database_url).unwrap();
     let pool = mysql_async::Pool::new(database_url);
     let pool = Arc::new(pool);
     let index = warp::path::end().map(|| {
