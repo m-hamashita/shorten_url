@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::env;
 use std::str::FromStr;
 
-use base62;
 use mysql_async::prelude::*;
 use sonyflake::Sonyflake;
 use warp::http::Uri;
@@ -39,7 +38,7 @@ async fn shorten(form_data: HashMap<String, String>) -> Result<impl warp::Reply,
         .await
         .expect("Failed to select query.");
 
-    if short_codes.len() > 0 {
+    if !short_codes.is_empty() {
         let short_url = full_short_url(&short_codes[0]);
         println!("Found short URL: {}", short_url);
         return Ok(warp::reply::html(format!(
@@ -96,7 +95,7 @@ async fn redirect(short: String) -> Result<impl warp::Reply, warp::Rejection> {
         .await
         .expect("Failed to select query.");
 
-    if urls.len() > 0 {
+    if !urls.is_empty() {
         println!("Found original URL: {}", urls[0]);
         let target_uri = Uri::from_str(&urls[0]).unwrap();
         println!("Redirect to: {}", target_uri);
