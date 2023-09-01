@@ -4,7 +4,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Result;
+use bloomfilter::Bloom;
 use clap::Parser;
+use crossbeam::sync::ShardedLock;
 use mysql_async::prelude::*;
 use sonyflake::Sonyflake;
 use warp::http::Uri;
@@ -49,36 +51,11 @@ fn rendering_short_url_html(short_url: &str) -> String {
     )
 }
 
-async fn shorten(
-    form_data: HashMap<String, String>,
-    pool: Arc<mysql_async::Pool>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut conn = pool
-        .get_conn()
-        .await
-        .expect("Failed to connect to database.");
-
-    let original_url = form_data
-        .get("url")
-        .unwrap_or(&String::from(""))
-        .to_string();
-    let short_codes = conn
-        .exec_map(
-            r"select short_code from url_mapping where original_url = :original_url",
-            params! {
-                "original_url" => &original_url,
-            },
-            |short_code: String| short_code,
-        )
-        .await
-        .expect("Failed to select query.");
-
-    if !short_codes.is_empty() {
-        let short_url = short_url(&short_codes[0]);
-        println!("Found short URL: {}", short_url);
-        return Ok(warp::reply::html(rendering_short_url_html(&short_url)));
-    }
-
+async fn generate_short_code(
+    conn: &mut mysql_async::Conn,
+    bloom: Arc<ShardedLock<Bloom<String>>>,
+    original_url: String,
+) -> Result<String> {
     let flake = Sonyflake::new().unwrap();
     let id = flake.next_id().unwrap();
     let short_code = base62::encode(id);
@@ -94,8 +71,61 @@ async fn shorten(
     )
     .await
     .expect("Failed to insert data.");
+    bloom.write().unwrap().set(&original_url);
 
     let short_url = short_url(&short_code);
+    Ok(short_url)
+}
+
+async fn get_short_code(conn: &mut mysql_async::Conn, original_url: String) -> Result<String> {
+    let short_codes = conn
+        .exec_map(
+            r"select short_code from url_mapping where original_url = :original_url",
+            params! {
+                "original_url" => &original_url,
+            },
+            |short_code: String| short_code,
+        )
+        .await
+        .expect("Failed to select query.");
+
+    if !short_codes.is_empty() {
+        let short_url = short_url(&short_codes[0]);
+        return Ok(short_url);
+    }
+
+    Err(anyhow::anyhow!("Not found short code"))
+}
+
+async fn shorten(
+    form_data: HashMap<String, String>,
+    pool: Arc<mysql_async::Pool>,
+    bloom: Arc<ShardedLock<Bloom<String>>>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let mut conn = pool
+        .get_conn()
+        .await
+        .expect("Failed to connect to database.");
+
+    let original_url = form_data
+        .get("url")
+        .unwrap_or(&String::from(""))
+        .to_string();
+    if !bloom.read().unwrap().check(&original_url) {
+        let short_url = generate_short_code(&mut conn, bloom.clone(), original_url.clone())
+            .await
+            .unwrap();
+        return Ok(warp::reply::html(rendering_short_url_html(&short_url)));
+    }
+
+    let short_url = get_short_code(&mut conn, original_url.clone()).await;
+    if let Ok(short_url) = short_url {
+        return Ok(warp::reply::html(rendering_short_url_html(&short_url)));
+    };
+
+    let short_url = generate_short_code(&mut conn, bloom.clone(), original_url.clone())
+        .await
+        .unwrap();
     Ok(warp::reply::html(rendering_short_url_html(&short_url)))
 }
 
@@ -143,6 +173,28 @@ struct Args {
     settings: String,
 }
 
+async fn init_bloomfilter(pool: Arc<mysql_async::Pool>) -> Result<bloomfilter::Bloom<String>> {
+    let num_items = 100000;
+    let fp_rate = 0.001;
+    let mut bloom = Bloom::new_for_fp_rate(num_items, fp_rate);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .expect("Failed to connect to database.");
+    let urls = conn
+        .exec_map(
+            r"select original_url from url_mapping",
+            (),
+            |original_url: String| original_url,
+        )
+        .await
+        .expect("Failed to select query");
+    for url in urls {
+        bloom.set(&url);
+    }
+    Ok(bloom)
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -176,11 +228,14 @@ async fn main() {
             "#,
         )
     });
+    let bloom = init_bloomfilter(pool.clone()).await.unwrap();
+    let bloom = Arc::new(ShardedLock::new(bloom));
 
     let shorten_route = warp::path!("shorten")
         .and(warp::post())
         .and(warp::body::form())
         .and(with(pool.clone()))
+        .and(with(bloom.clone()))
         .and_then(shorten);
     let redirect_route = warp::path!(String)
         .and(with(pool.clone()))
