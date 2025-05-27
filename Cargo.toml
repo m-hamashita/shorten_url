@@ -4,15 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.75"
-base62 = "2.0.2"
-bloomfilter = "1.0.12"
-clap = { version = "4.4.0", features = ["derive"] }
-config = "0.13.3"
-crossbeam = "0.8.2"
-mysql_async = "0.32.2"
+anyhow = "1.0.98"
+base62 = "2.2.1"
+bloomfilter = "3.0.1"
+clap = { version = "4.5.38", features = ["derive"] }
+config = "0.15.11"
+crossbeam = "0.8.4"
+mysql_async = "0.36.1"
 redis_rs = "0.9.0"
-serde = { version = "1.0.188", features = ["derive"] }
-sonyflake = "0.2.0"
-tokio = { version = "1.32.0", features = ["full"] }
-warp = "0.3.5"
+serde = { version = "1.0.219", features = ["derive"] }
+sonyflake = "0.3.0"
+tokio = { version = "1.45.1", features = ["full"] }
+warp = "0.3.7"

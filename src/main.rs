@@ -176,7 +176,7 @@ struct Args {
 async fn init_bloomfilter(pool: Arc<mysql_async::Pool>) -> Result<bloomfilter::Bloom<String>> {
     let num_items = 100000;
     let fp_rate = 0.001;
-    let mut bloom = Bloom::new_for_fp_rate(num_items, fp_rate);
+    let mut bloom = Bloom::new_for_fp_rate(num_items, fp_rate).unwrap();
     let mut conn = pool
         .get_conn()
         .await
